@@ -31,6 +31,7 @@ from config import (  # noqa: E402
 )
 from database import Database  # noqa: E402
 from fetcher import ProxyFetcher  # noqa: E402
+from validator import ProxyValidator  # noqa: E402
 
 app = Flask(__name__)
 
@@ -108,6 +109,77 @@ async def _gather_stats(db: Database):
         "failed_proxies": stats["failed"],
         "last_meta_update": last_meta,
     }
+
+
+async def _run_on_demand_cycle(limit: int = 20):
+    """
+    Run a serverless-friendly mini-cycle:
+    - fetch meta
+    - fetch proxy lists
+    - test a limited batch of proxies once
+    - upsert results into the DB
+    """
+    db = Database()
+    fetcher = ProxyFetcher()
+    validator = ProxyValidator()
+
+    await db.init()
+    await fetcher.init()
+    await validator.init()
+
+    summary = {
+        "meta_saved": None,
+        "fetched_total_unique": 0,
+        "tested": 0,
+        "working": 0,
+        "errors": [],
+    }
+
+    try:
+        # Meta
+        try:
+            meta_ts = await fetcher.fetch_meta()
+            summary["meta_saved"] = meta_ts
+            if meta_ts:
+                await db.save_meta(meta_ts)
+        except Exception as e:  # pragma: no cover
+            summary["errors"].append(f"meta: {e}")
+
+        # Fetch lists
+        http_list, https_list = [], []
+        try:
+            http_list, https_list = await fetcher.fetch_proxy_lists()
+        except Exception as e:  # pragma: no cover
+            summary["errors"].append(f"lists: {e}")
+
+        combined = list({*http_list, *https_list})
+        summary["fetched_total_unique"] = len(combined)
+
+        if combined:
+            candidates = combined[:limit]
+            summary["tested"] = len(candidates)
+
+            # Single-attempt tests to fit serverless timing
+            tasks = [validator.test_proxy(p) for p in candidates]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for proxy_url, result in zip(candidates, results):
+                if isinstance(result, Exception):
+                    summary["errors"].append(f"{proxy_url}: {result}")
+                    await db.upsert_proxy(proxy_url, False, None, None)
+                    continue
+
+                working, timeout, protocol = result
+                if working:
+                    summary["working"] += 1
+                await db.upsert_proxy(proxy_url, working, timeout, protocol)
+
+    finally:
+        await validator.close()
+        await fetcher.close()
+        await db.close()
+
+    return summary
 
 
 async def _gather_fetcher_diagnostics():
@@ -211,6 +283,11 @@ def _diagnostics_payload():
             "routes": ["/", "/list", "/random", "/stats", "/health", "/diagnostics"],
             "implementation": "Flask on Vercel (serverless) / aiohttp locally via main.py",
         },
+        "on_demand_cycle": {
+            "description": "POST /run-cycle triggers a single fetch+validate mini-cycle (serverless-friendly)",
+            "default_limit": 20,
+            "serverless_runtime": vercel,
+        },
     }
 
 
@@ -287,6 +364,34 @@ def diagnostics():
     """
     payload = _diagnostics_payload()
     return jsonify(payload)
+
+
+@app.post("/run-cycle")
+def run_cycle():
+    """
+    Trigger a single serverless-friendly mini-cycle:
+    - fetch meta
+    - fetch proxy lists
+    - test a limited batch once
+    - upsert results into the DB
+
+    Query params:
+        limit (int, optional): number of proxies to test (default: 20, max: 100)
+    """
+    raw_limit = request.args.get("limit")
+    limit = 20
+    if raw_limit:
+        try:
+            limit = max(1, min(100, int(raw_limit)))
+        except ValueError:
+            return jsonify({"error": "limit must be an integer"}), 400
+
+    try:
+        result = _run_async(_run_on_demand_cycle(limit=limit))
+        return jsonify({"limit": limit, "result": result})
+    except Exception:
+        logger.exception("run-cycle failed")
+        return jsonify({"error": "internal_error"}), 500
 
 
 @app.get("/health")
