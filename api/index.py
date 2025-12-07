@@ -366,10 +366,10 @@ def diagnostics():
     return jsonify(payload)
 
 
-@app.post("/run-cycle")
+@app.route("/run-cycle", methods=["GET", "POST"])
 def run_cycle():
     """
-    Trigger a single serverless-friendly mini-cycle:
+    Trigger a single serverless-friendly mini-cycle (GET or POST):
     - fetch meta
     - fetch proxy lists
     - test a limited batch once
