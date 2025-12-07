@@ -14,7 +14,7 @@ from pathlib import Path
 
 from server import ProxyServer
 from worker import ProxyWorker
-from config import LOG_LEVEL, LOG_FORMAT, API_HOST, API_PORT
+from config import LOG_LEVEL, LOG_FORMAT, API_HOST, API_PORT, LOG_FILE
 
 # Configure logging
 logging.basicConfig(
@@ -22,7 +22,7 @@ logging.basicConfig(
     format=LOG_FORMAT,
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('data/proxy_server.log')
+        logging.FileHandler(LOG_FILE)
     ]
 )
 

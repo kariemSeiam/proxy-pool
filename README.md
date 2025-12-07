@@ -32,18 +32,6 @@ The server will:
 - Start background validation worker
 - Begin fetching and validating proxies
 
-## Deploy on Vercel
-
-This repo includes a Flask entrypoint at `api/index.py` plus `vercel.json` for rewrites.
-
-1. Install the Vercel CLI: `npm i -g vercel`
-2. Run locally: `vercel dev` (serves on http://localhost:3000)
-3. Deploy: `vercel --prod`
-
-Notes:
-- Vercel uses a read-only filesystem; the app writes the SQLite database to `/tmp` when deployed.
-- The background worker in `main.py` is not started on Vercel. Run it elsewhere if you need live proxy updates, or ship a prebuilt database.
-
 ## API Endpoints
 
 ### GET /list
@@ -229,6 +217,19 @@ Build and run:
 docker build -t proxy-server .
 docker run -d -p 8000:8000 -v $(pwd)/data:/app/data --name proxy-server proxy-server
 ```
+
+### Deploy to Render
+
+1. Commit and push this repo to GitHub.
+2. In Render, create a new Web Service from the repo or this `render.yaml`.
+3. Use these settings:
+   - Environment: Python
+   - Build command: `pip install -r requirements.txt`
+   - Start command: `python main.py`
+   - Health check path: `/health`
+   - Env vars: `PYTHON_VERSION=3.11`, `DATA_DIR=/var/data`
+   - Disk: mount 1GB at `/var/data` (keeps SQLite DB and logs)
+4. Render supplies `PORT`; the server reads it automatically.
 
 ## Troubleshooting
 
