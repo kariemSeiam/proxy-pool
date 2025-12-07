@@ -12,8 +12,25 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-from config import DATA_DIR, DB_FILE  # noqa: E402
+from config import (  # noqa: E402
+    API_HOST,
+    API_PORT,
+    DATA_DIR,
+    DB_FILE,
+    HTTP_PROXIES_URL,
+    HTTPS_PROXIES_URL,
+    META_API_URL,
+    MAX_CONCURRENT_TESTS,
+    MAX_FAILURES,
+    META_CHECK_INTERVAL,
+    REVALIDATION_INTERVAL,
+    TEST_TIMEOUT,
+    TEST_URL,
+    VALIDATION_DURATION,
+    VALIDATION_REQUESTS,
+)
 from database import Database  # noqa: E402
+from fetcher import ProxyFetcher  # noqa: E402
 
 app = Flask(__name__)
 
@@ -38,6 +55,11 @@ def _run_with_db(fn: Callable[[Database], Awaitable]):
             await db.close()
 
     return asyncio.run(_inner())
+
+
+def _run_async(coro: Awaitable):
+    """Run an async coroutine in a fresh event loop (serverless-safe)."""
+    return asyncio.run(coro)
 
 
 def _parse_limit(raw_limit: Optional[str]):
@@ -88,8 +110,57 @@ async def _gather_stats(db: Database):
     }
 
 
+async def _gather_fetcher_diagnostics():
+    """Fetch meta and proxy lists once to verify external sources."""
+    fetcher = ProxyFetcher()
+    await fetcher.init()
+
+    meta_timestamp = None
+    meta_status = "unavailable"
+    meta_error = None
+
+    try:
+        meta_timestamp = await fetcher.fetch_meta()
+        meta_status = "ok" if meta_timestamp else "missing"
+    except Exception as e:
+        meta_error = str(e)
+
+    lists = {
+        "http_count": 0,
+        "https_count": 0,
+        "total_unique": 0,
+        "sample": [],
+        "error": None,
+    }
+
+    try:
+        http_proxies, https_proxies = await fetcher.fetch_proxy_lists()
+        combined = list({*http_proxies, *https_proxies})
+        lists.update(
+            {
+                "http_count": len(http_proxies),
+                "https_count": len(https_proxies),
+                "total_unique": len(combined),
+                "sample": combined[:5],
+            }
+        )
+    except Exception as e:
+        lists["error"] = str(e)
+
+    await fetcher.close()
+
+    return {
+        "meta": {
+            "timestamp": meta_timestamp,
+            "status": meta_status,
+            "error": meta_error,
+        },
+        "lists": lists,
+    }
+
+
 def _diagnostics_payload():
-    """Collect runtime diagnostics for troubleshooting."""
+    """Collect runtime diagnostics for troubleshooting the full cycle."""
     db_exists = DB_FILE.exists()
     db_size = DB_FILE.stat().st_size if db_exists else 0
 
@@ -99,15 +170,47 @@ def _diagnostics_payload():
         logger.exception("Failed to load stats for diagnostics")
         stats = {"error": "stats_unavailable"}
 
+    vercel = bool(os.getenv("VERCEL"))
+
+    fetcher_diag = _run_async(_gather_fetcher_diagnostics())
+
     return {
-        "vercel": bool(os.getenv("VERCEL")),
-        "data_dir": str(DATA_DIR),
-        "data_dir_writable": _is_writable(DATA_DIR),
-        "db_file": str(DB_FILE),
-        "db_exists": db_exists,
-        "db_size_bytes": db_size,
-        "env_data_dir_override": os.getenv("DATA_DIR") is not None,
+        "runtime": {
+            "vercel": vercel,
+            "data_dir": str(DATA_DIR),
+            "data_dir_writable": _is_writable(DATA_DIR),
+            "env_data_dir_override": os.getenv("DATA_DIR") is not None,
+        },
+        "database": {
+            "db_file": str(DB_FILE),
+            "db_exists": db_exists,
+            "db_size_bytes": db_size,
+        },
         "stats": stats,
+        "fetcher": fetcher_diag,
+        "config": {
+            "api_host": API_HOST,
+            "api_port": API_PORT,
+            "meta_api_url": META_API_URL,
+            "http_proxies_url": HTTP_PROXIES_URL,
+            "https_proxies_url": HTTPS_PROXIES_URL,
+            "test_url": TEST_URL,
+            "test_timeout_seconds": TEST_TIMEOUT,
+            "validation_requests": VALIDATION_REQUESTS,
+            "validation_duration_minutes": VALIDATION_DURATION,
+            "max_failures": MAX_FAILURES,
+            "meta_check_interval_seconds": META_CHECK_INTERVAL,
+            "revalidation_interval_minutes": REVALIDATION_INTERVAL,
+            "max_concurrent_tests": MAX_CONCURRENT_TESTS,
+        },
+        "worker": {
+            "runs_in_this_environment": not vercel,
+            "note": "Vercel serverless does not execute the background worker",
+        },
+        "server": {
+            "routes": ["/", "/list", "/random", "/stats", "/health", "/diagnostics"],
+            "implementation": "Flask on Vercel (serverless) / aiohttp locally via main.py",
+        },
     }
 
 
