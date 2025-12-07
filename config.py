@@ -12,38 +12,11 @@ from pathlib import Path
 # PATHS
 # ============================================================================
 BASE_DIR = Path(__file__).parent
-
-
-def _resolve_data_dir() -> Path:
-    """
-    Resolve the data directory with support for readonly environments.
-
-    Preference:
-    1. DATA_DIR environment variable
-    2. /tmp/proxy-data when running on Vercel (filesystem is readonly elsewhere)
-    3. Local ./data directory for standard execution
-    """
-    env_dir = os.getenv("DATA_DIR")
-    if env_dir:
-        return Path(env_dir)
-
-    if os.getenv("VERCEL"):
-        return Path("/tmp/proxy-data")
-
-    return BASE_DIR / "data"
-
-
-DATA_DIR = _resolve_data_dir()
-
-# Ensure the directory exists; fall back to /tmp if the current location
-# is not writable (common in serverless environments).
-try:
-    DATA_DIR.mkdir(exist_ok=True, parents=True)
-except PermissionError:
-    DATA_DIR = Path("/tmp/proxy-data")
-    DATA_DIR.mkdir(exist_ok=True, parents=True)
-
+DEFAULT_DATA_DIR = BASE_DIR / "data"
+DATA_DIR = Path(os.getenv("DATA_DIR", DEFAULT_DATA_DIR))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_FILE = DATA_DIR / "proxies.db"
+LOG_FILE = DATA_DIR / "proxy_server.log"
 
 # ============================================================================
 # API ENDPOINTS
@@ -96,8 +69,8 @@ HTTP_POOL_MAXSIZE = 500
 # SERVER SETTINGS
 # ============================================================================
 # API server host and port
-API_HOST = "0.0.0.0"
-API_PORT = 8000
+API_HOST = os.getenv("HOST", "0.0.0.0")
+API_PORT = int(os.getenv("PORT", "8000"))
 
 # ============================================================================
 # LOGGING

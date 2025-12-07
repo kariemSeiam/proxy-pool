@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: proxy-server
+    env: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: DATA_DIR
+        value: /var/data
+    disk:
+      name: proxy-data
+      mountPath: /var/data
+      sizeGB: 1
+
