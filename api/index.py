@@ -12,7 +12,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-from database import Database
+from config import DATA_DIR, DB_FILE  # noqa: E402
+from database import Database  # noqa: E402
 
 app = Flask(__name__)
 
@@ -61,6 +62,53 @@ def _parse_limit(raw_limit: Optional[str]):
         )
 
     return limit, None
+
+
+def _is_writable(path: Path) -> bool:
+    """Check whether a directory is writable."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        test_file = path / ".write_test"
+        test_file.write_text("ok", encoding="utf-8")
+        test_file.unlink(missing_ok=True)
+        return True
+    except Exception:
+        logger.exception("Data directory is not writable", extra={"path": str(path)})
+        return False
+
+
+async def _gather_stats(db: Database):
+    stats = await db.get_stats()
+    last_meta = await db.get_last_meta()
+    return {
+        "total_proxies": stats["total"],
+        "working_proxies": stats["working"],
+        "failed_proxies": stats["failed"],
+        "last_meta_update": last_meta,
+    }
+
+
+def _diagnostics_payload():
+    """Collect runtime diagnostics for troubleshooting."""
+    db_exists = DB_FILE.exists()
+    db_size = DB_FILE.stat().st_size if db_exists else 0
+
+    try:
+        stats = _run_with_db(_gather_stats)
+    except Exception:
+        logger.exception("Failed to load stats for diagnostics")
+        stats = {"error": "stats_unavailable"}
+
+    return {
+        "vercel": bool(os.getenv("VERCEL")),
+        "data_dir": str(DATA_DIR),
+        "data_dir_writable": _is_writable(DATA_DIR),
+        "db_file": str(DB_FILE),
+        "db_exists": db_exists,
+        "db_size_bytes": db_size,
+        "env_data_dir_override": os.getenv("DATA_DIR") is not None,
+        "stats": stats,
+    }
 
 
 @app.get("/")
@@ -113,17 +161,6 @@ def random_proxy():
     return Response(proxy, status=200, mimetype="text/plain")
 
 
-async def _gather_stats(db: Database):
-    stats = await db.get_stats()
-    last_meta = await db.get_last_meta()
-    return {
-        "total_proxies": stats["total"],
-        "working_proxies": stats["working"],
-        "failed_proxies": stats["failed"],
-        "last_meta_update": last_meta,
-    }
-
-
 @app.get("/stats")
 def stats():
     """Return proxy statistics."""
@@ -134,6 +171,19 @@ def stats():
         return jsonify({"error": "Internal server error"}), 500
 
     return jsonify(data)
+
+
+@app.get("/diagnostics")
+def diagnostics():
+    """
+    Return runtime diagnostics to verify the fetch/validate cycle.
+
+    Notes:
+    - On Vercel, only the API handler runs; background worker is not active.
+    - data_dir_writable=False indicates the runtime cannot persist the database.
+    """
+    payload = _diagnostics_payload()
+    return jsonify(payload)
 
 
 @app.get("/health")
