@@ -1,0 +1,17 @@
+[Unit]
+Description=Proxy Pool v2 — Scored proxy pool with REST API
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/proxy-pool-v2
+ExecStart=/usr/local/lib/hermes-agent/venv/bin/python3 main.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=proxy-pool
+
+[Install]
+WantedBy=multi-user.target
