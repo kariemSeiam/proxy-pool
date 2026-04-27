@@ -38,11 +38,24 @@ META_URL: str = (
     "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/meta/data.json"
 )
 
-# ── Validation ───────────────────────────────────────────────────────────────
-TEST_URL: str = "http://icanhazip.com"  # lightweight — returns your IP
-TEST_TIMEOUT: int = 5       # seconds per proxy test
-MAX_CONCURRENT: int = 200   # semaphore cap for parallel testing
-BATCH_SIZE: int = 200       # proxies tested per scheduler cycle
+# ── Validation (FIXED — real HTTPS testing) ──────────────────────────────────
+# Multiple test targets: a proxy must succeed on AT LEAST ONE to count as working.
+# Uses GET requests (not HEAD) over HTTPS (not HTTP) for realistic validation.
+TEST_URLS: list[dict[str, str]] = [
+    {"url": "https://httpbin.org/ip",           "name": "httpbin",    "expect": "origin"},
+    {"url": "https://icanhazip.com",             "name": "icanhazip",  "expect": ""},
+    {"url": "https://www.google.com/robots.txt", "name": "google",     "expect": "User-agent"},
+]
+# How many test targets a proxy must pass to be considered "working".
+# 1 = lenient (passes if ANY target works), 2 = strict, 3 = very strict
+TEST_MIN_PASSES: int = 1
+
+TEST_TIMEOUT: int = 8       # seconds per proxy test (increased for HTTPS)
+MAX_CONCURRENT: int = 50    # semaphore cap — lowered for HTTPS (heavier)
+BATCH_SIZE: int = 100       # proxies tested per scheduler cycle
+
+# Keep old TEST_URL for backward compat (scheduler/validator import it)
+TEST_URL: str = "https://httpbin.org/ip"
 
 # ── Tier Thresholds ──────────────────────────────────────────────────────────
 #   gold   = battle-tested, high reliability
